@@ -1,0 +1,20 @@
+FROM golang:1.24-alpine AS builder
+
+RUN apk add --no-cache terraform
+
+WORKDIR /build
+COPY apps/deploy-worker/go.mod apps/deploy-worker/go.sum ./
+RUN go mod download
+
+COPY apps/deploy-worker/ ./apps/deploy-worker/
+COPY pkg/ ../pkg/
+
+RUN CGO_ENABLED=0 GOOS=linux go build -o /worker ./apps/deploy-worker/cmd/main.go
+
+FROM alpine:3.20
+
+RUN apk add --no-cache ca-certificates tzdata terraform
+
+COPY --from=builder /worker /worker
+
+CMD ["/worker"]

@@ -6,7 +6,9 @@ type JobType string
 type JobStatus string
 
 const (
-	JobTypeDeploy JobType = "deploy"
+	JobTypeDeploy  JobType = "deploy"
+	JobTypeRollback JobType = "rollback"
+	JobTypeRetry   JobType = "retry"
 )
 
 const (

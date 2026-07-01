@@ -22,5 +22,17 @@ terraform/**/tfplan
 terraform/**/*.tfstate*
 terraform/**/crash.log
 
+# Frontend (Node.js)
+apps/frontend/node_modules/
+apps/frontend/dist/
+
+# Go compiled binaries (in subdirectories)
+apps/**/main.exe
+apps/**/worker.exe
+
+# OS
+.DS_Store
+Thumbs.db
+
 # Temp
 tmp/

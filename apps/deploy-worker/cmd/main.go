@@ -8,6 +8,7 @@ import (
 
 	"gitops-lite/apps/deploy-worker/internal/config"
 	"gitops-lite/apps/deploy-worker/internal/consumer"
+	"gitops-lite/apps/deploy-worker/internal/events"
 	"gitops-lite/apps/deploy-worker/internal/executor"
 	"gitops-lite/apps/deploy-worker/internal/health"
 	"gitops-lite/pkg/repository"
@@ -42,11 +43,12 @@ func main() {
 
 	tfExecutor := executor.NewTerraformExecutor(cfg.TFWorkDir)
 	checker := health.NewChecker()
+	eventClient := events.NewClient(cfg.APIURL)
 
 	c, err := consumer.NewConsumer(
 		cfg.RabbitMQURL, cfg.DeployQueue,
 		deployRepo, logRepo, jobRepo,
-		tfExecutor, checker,
+		tfExecutor, checker, eventClient,
 	)
 	if err != nil {
 		log.Fatal().Err(err).Msg("failed to create consumer")

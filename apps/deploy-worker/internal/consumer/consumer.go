@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"sync/atomic"
 
+	"gitops-lite/apps/deploy-worker/internal/events"
 	"gitops-lite/apps/deploy-worker/internal/executor"
 	"gitops-lite/apps/deploy-worker/internal/health"
 	"gitops-lite/pkg/model"
@@ -18,16 +19,17 @@ import (
 )
 
 type Consumer struct {
-	conn       *amqp.Connection
-	channel    *amqp.Channel
-	queue      string
-	deployRepo *repository.DeploymentRepo
-	logRepo    *repository.LogRepo
-	jobRepo    *repository.JobRepo
-	tfExecutor *executor.TerraformExecutor
-	checker    *health.Checker
-	seq        atomic.Int64
-	done       chan struct{}
+	conn         *amqp.Connection
+	channel      *amqp.Channel
+	queue        string
+	deployRepo   *repository.DeploymentRepo
+	logRepo      *repository.LogRepo
+	jobRepo      *repository.JobRepo
+	tfExecutor   *executor.TerraformExecutor
+	checker      *health.Checker
+	eventClient  *events.Client
+	seq          atomic.Int64
+	done         chan struct{}
 }
 
 func NewConsumer(
@@ -37,6 +39,7 @@ func NewConsumer(
 	jobRepo *repository.JobRepo,
 	tfExecutor *executor.TerraformExecutor,
 	checker *health.Checker,
+	eventClient *events.Client,
 ) (*Consumer, error) {
 	conn, err := amqp.Dial(rabbitmqURL)
 	if err != nil {
@@ -63,15 +66,16 @@ func NewConsumer(
 	}
 
 	return &Consumer{
-		conn:       conn,
-		channel:    ch,
-		queue:      queue,
-		deployRepo: deployRepo,
-		logRepo:    logRepo,
-		jobRepo:    jobRepo,
-		tfExecutor: tfExecutor,
-		checker:    checker,
-		done:       make(chan struct{}),
+		conn:        conn,
+		channel:     ch,
+		queue:       queue,
+		deployRepo:  deployRepo,
+		logRepo:     logRepo,
+		jobRepo:     jobRepo,
+		tfExecutor:  tfExecutor,
+		checker:     checker,
+		eventClient: eventClient,
+		done:        make(chan struct{}),
 	}, nil
 }
 
@@ -114,6 +118,7 @@ func (c *Consumer) processMessage(ctx context.Context, msg amqp.Delivery) {
 	log.Info().Str("deploy_id", payload.DeploymentID).Str("app", payload.AppName).Msg("processing deploy job")
 
 	c.deployRepo.UpdateStatus(ctx, payload.DeploymentID, model.StatusInProgress, nil)
+	c.eventClient.PublishUpdate(payload.DeploymentID, string(model.StatusInProgress))
 
 	if err := c.appendLog(ctx, payload.DeploymentID, "received", model.LogInfo, "Job received by worker"); err != nil {
 		log.Error().Err(err).Msg("failed to write log")
@@ -177,6 +182,7 @@ func (c *Consumer) processMessage(ctx context.Context, msg amqp.Delivery) {
 	c.appendLog(ctx, payload.DeploymentID, "health_check", model.LogInfo, checkMsg)
 
 	c.deployRepo.UpdateStatus(ctx, payload.DeploymentID, model.StatusSuccess, nil)
+	c.eventClient.PublishUpdate(payload.DeploymentID, string(model.StatusSuccess))
 	c.appendLog(ctx, payload.DeploymentID, "completed", model.LogInfo, "Deploy completed successfully")
 
 	msg.Ack(false)
@@ -186,6 +192,7 @@ func (c *Consumer) processMessage(ctx context.Context, msg amqp.Delivery) {
 
 func (c *Consumer) failDeployment(ctx context.Context, msg amqp.Delivery, deployID, errMsg string) {
 	c.deployRepo.UpdateStatus(ctx, deployID, model.StatusFailed, &errMsg)
+	c.eventClient.PublishUpdate(deployID, string(model.StatusFailed))
 	c.appendLog(ctx, deployID, "failed", model.LogError, errMsg)
 	msg.Nack(false, false)
 	log.Error().Str("deploy_id", deployID).Msg(errMsg)
@@ -193,6 +200,7 @@ func (c *Consumer) failDeployment(ctx context.Context, msg amqp.Delivery, deploy
 
 func (c *Consumer) appendLog(ctx context.Context, deployID, step string, level model.LogLevel, message string) error {
 	seq := c.seq.Add(1)
+	c.eventClient.PublishLog(deployID, step, string(level), message)
 	return c.logRepo.Append(ctx, deployID, step, level, message, seq)
 }
 

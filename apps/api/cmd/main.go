@@ -48,14 +48,32 @@ func main() {
 	defer producer.Close()
 	log.Info().Msg("connected to RabbitMQ")
 
+	// Handlers
 	deployHandler := handler.NewDeployHandler(deployRepo, jobRepo, producer)
 	deploymentHandler := handler.NewDeploymentHandler(deployRepo, logRepo)
+	logHandler := handler.NewLogHandler(logRepo)
+	rollbackOpsHandler := handler.NewDeployHandlerOps(deployRepo, jobRepo, producer)
+	eventsHandler := handler.NewEventsHandler()
+
+	staticDir := ""
+	if _, err := os.Stat("../../apps/frontend/dist"); err == nil {
+		staticDir = "../../apps/frontend/dist"
+	} else if _, err := os.Stat("./apps/frontend/dist"); err == nil {
+		staticDir = "./apps/frontend/dist"
+	}
 
 	app := fiber.New(fiber.Config{
 		AppName: "GitOps Lite API",
 	})
 
-	handler.SetupRouter(app, deployHandler, deploymentHandler)
+	handler.SetupRouter(app, &handler.AllHandlers{
+		Deploy:      deployHandler,
+		Deployment:  deploymentHandler,
+		Logs:        logHandler,
+		RollbackOps: rollbackOpsHandler,
+		Events:      eventsHandler,
+		StaticDir:   staticDir,
+	})
 
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)

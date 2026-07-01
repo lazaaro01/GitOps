@@ -2,7 +2,9 @@ package config
 
 import (
 	"os"
+	"path/filepath"
 	"strconv"
+	"strings"
 
 	"github.com/rs/zerolog"
 )
@@ -16,6 +18,7 @@ type Config struct {
 }
 
 func Load() *Config {
+	loadEnvFile()
 	cfg := &Config{
 		DatabaseURL: getEnv("DATABASE_URL", "postgres://gitops:gitops@localhost:5432/gitops?sslmode=disable"),
 		RabbitMQURL: getEnv("RABBITMQ_URL", "amqp://guest:guest@localhost:5672"),
@@ -40,6 +43,38 @@ func getEnvInt(key string, fallback int) int {
 		}
 	}
 	return fallback
+}
+
+func loadEnvFile() {
+	dir, err := os.Getwd()
+	if err != nil {
+		return
+	}
+	for {
+		path := filepath.Join(dir, ".env")
+		if data, err := os.ReadFile(path); err == nil {
+			for _, line := range strings.Split(string(data), "\n") {
+				line = strings.TrimSpace(line)
+				if line == "" || strings.HasPrefix(line, "#") {
+					continue
+				}
+				parts := strings.SplitN(line, "=", 2)
+				if len(parts) == 2 {
+					key := strings.TrimSpace(parts[0])
+					val := strings.TrimSpace(parts[1])
+					if os.Getenv(key) == "" {
+						os.Setenv(key, val)
+					}
+				}
+			}
+			return
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return
+		}
+		dir = parent
+	}
 }
 
 func parseLogLevel(level string) zerolog.Level {

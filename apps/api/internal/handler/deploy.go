@@ -89,6 +89,8 @@ func (h *DeployHandler) Create(c *fiber.Ctx) error {
 		h.jobRepo.UpdateStatus(c.Context(), job.ID, model.JobRunning, nil)
 	}
 
+	PublishDeployUpdate(deploy.ID, string(model.StatusQueued))
+
 	return c.Status(202).JSON(model.APIResponse{
 		Success: true,
 		Data:    deploy,

@@ -2,7 +2,9 @@
 
 Plataforma de Deploy Automatizado baseada em GitOps e Infrastructure as Code.
 
-> **Versão atual:** MVP v1.0.0 — Backend
+> **Versão atual:** v1.1.0 — Dashboard + Rollback
+>
+> **Desenvolvido por:** Lázaro Vasconcelos
 
 ---
 
@@ -10,12 +12,13 @@ Plataforma de Deploy Automatizado baseada em GitOps e Infrastructure as Code.
 
 | Categoria | Tecnologia |
 |---|---|
-| Linguagem | Go 1.24+ |
-| Web Framework | Fiber v2 |
-| PostgreSQL Driver | pgx v5 |
-| Logger | zerolog |
-| Message Broker | RabbitMQ |
+| Backend | Go 1.24+ · Fiber v2 · pgx v5 · zerolog |
+| Frontend | React 18 · TypeScript · Vite · Tailwind CSS |
+| Gráficos | Recharts |
+| Mensageria | RabbitMQ |
 | Infraestrutura | Terraform + Docker Provider |
+| Streaming | SSE (Server-Sent Events) |
+| Banco | PostgreSQL 16 |
 | Containerização | Docker + Docker Compose |
 
 ---
@@ -24,18 +27,27 @@ Plataforma de Deploy Automatizado baseada em GitOps e Infrastructure as Code.
 
 ```mermaid
 flowchart TD
-    User["Usuário / GitHub Webhook"]
-    User -->|POST /deploy| API["API (Go / Fiber)"]
+    User["Usuário"]
+    User -->|HTTP| API["API (Go / Fiber)"]
+    API -->|Serve SPA| Frontend["Dashboard Web (React + Vite)"]
+    Frontend -->|REST + SSE| API
+
     API -->|Publica Job| RMQ["RabbitMQ"]
     RMQ -->|Consome| Worker["Deploy Worker"]
+
     Worker --> TF["Terraform Executor"]
     TF --> TFInit["terraform init"]
     TFInit --> TFPlan["terraform plan"]
     TFPlan --> TFApply["terraform apply"]
     TFApply --> Docker["Docker Provider"]
-    Docker --> Containers["Containers (App + DB)"]
+    Docker --> Containers["Containers"]
+
     Worker -->|Health Check| Containers
-    Worker -->|Persiste resultado| DB[("PostgreSQL")]
+    Worker -->|SSE Events| API
+    Worker -->|Persiste resultado + state snapshot| DB[("PostgreSQL")]
+
+    API -->|Consulta histórico| DB
+    Frontend -->|Logs via SSE| API
 ```
 
 ---
@@ -45,38 +57,50 @@ flowchart TD
 ```
 gitops-lite/
 ├── apps/
-│   ├── api/                    # API HTTP (Fiber)
+│   ├── api/                        # API HTTP (Fiber)
 │   │   ├── cmd/main.go
 │   │   └── internal/
-│   │       ├── config/         # Configurações via env
-│   │       ├── handler/        # Handlers HTTP
-│   │       └── queue/          # Producer RabbitMQ
-│   └── deploy-worker/          # Worker assíncrono
-│       ├── cmd/main.go
-│       └── internal/
-│           ├── config/
-│           ├── consumer/       # Consumer RabbitMQ
-│           ├── executor/       # Terraform executor
-│           └── health/         # Health check HTTP
-├── pkg/                        # Pacotes compartilhados
-│   ├── model/                  # Structs/entities
-│   └── repository/             # Acesso a banco (pgx)
-├── terraform/                  # Módulos Terraform
+│   │       ├── config/             # Config via env + .env loader
+│   │       ├── handler/            # Handlers HTTP (deploy, logs, rollback, events, router)
+│   │       └── queue/              # Producer RabbitMQ
+│   ├── deploy-worker/              # Worker assíncrono
+│   │   ├── cmd/main.go
+│   │   └── internal/
+│   │       ├── config/
+│   │       ├── consumer/           # Consumer RabbitMQ
+│   │       ├── events/             # HTTP client para SSE
+│   │       ├── executor/           # Terraform executor
+│   │       └── health/             # Health check HTTP
+│   └── frontend/                   # Dashboard Web (React + Vite)
+│       ├── src/
+│       │   ├── components/         # Layout, DeployTable, DeployTimeline,
+│       │   │                       # LogViewer, RollbackModal, HistoryChart, StatusBadge
+│       │   ├── pages/              # Dashboard, DeployDetail, History
+│       │   ├── services/           # api.ts (Axios), sse.ts (EventSource)
+│       │   ├── hooks/              # useDeployments, useDeployDetail, useSSE
+│       │   └── types/              # TypeScript interfaces
+│       ├── package.json
+│       └── vite.config.ts
+├── pkg/                            # Pacotes compartilhados
+│   ├── model/                      # Deployment, Job, Log, API response
+│   └── repository/                 # Acesso a banco (pgx)
+├── terraform/                      # Módulos Terraform
 │   ├── modules/
-│   │   ├── network/            # Rede Docker
-│   │   ├── container/          # Container Docker
-│   │   └── volume/             # Volume Docker
-│   └── app/                    # Root module (deploy)
-├── migrations/                 # Migrations SQL
+│   │   ├── network/                # Rede Docker
+│   │   ├── container/              # Container Docker
+│   │   └── volume/                 # Volume Docker
+│   └── app/                        # Root module (deploy)
+├── migrations/                     # Migrations SQL
 ├── docker/
 │   ├── Dockerfile.api
 │   ├── Dockerfile.worker
 │   └── docker-compose.yml
 ├── scripts/
-│   ├── setup.ps1               # Setup completo
-│   ├── migrate.ps1             # Rodar migrations
-│   └── deploy.ps1              # Exemplo de deploy via API
-├── go.work                     # Go workspace
+│   ├── setup.ps1
+│   ├── migrate.ps1
+│   └── deploy.ps1
+├── docs/                           # PRDs e especificações
+├── go.work                         # Go workspace
 └── README.md
 ```
 
@@ -85,10 +109,9 @@ gitops-lite/
 ## Pré-requisitos
 
 - **Go 1.24+** — [Download](https://go.dev/dl/)
+- **Node.js 20+** — [Download](https://nodejs.org/)
 - **Docker Desktop** — [Download](https://docs.docker.com/get-docker/)
 - **Terraform 1.6+** — [Download](https://developer.hashicorp.com/terraform/downloads)
-- **RabbitMQ** (via Docker)
-- **PostgreSQL 16** (via Docker)
 
 ---
 
@@ -102,26 +125,11 @@ docker compose -f docker/docker-compose.yml up -d postgres rabbitmq
 
 Aguarde os serviços ficarem prontos (~10s).
 
-### 2. Execute as migrations
+> O PostgreSQL estará disponível em `localhost:5433` (porta 5432 do container mapeada para 5433 no host para evitar conflitos com outras instalações locais).
 
-```bash
-# Usando PowerShell
-.\scripts\migrate.ps1
+### 2. Execute o backend (API + Worker)
 
-# Ou manualmente com psql
-psql postgres://gitops:gitops@localhost:5432/gitops -f migrations/001_create_deployments.sql
-psql postgres://gitops:gitops@localhost:5432/gitops -f migrations/002_create_deployment_logs.sql
-psql postgres://gitops:gitops@localhost:5432/gitops -f migrations/003_create_jobs.sql
-```
-
-### 3. Inicialize o Terraform
-
-```bash
-cd terraform/app
-terraform init
-```
-
-### 4. Rode a API
+**Terminal 1 — API:**
 
 ```bash
 cd apps/api
@@ -130,16 +138,109 @@ go run ./cmd/main.go
 
 A API estará disponível em `http://localhost:8080`.
 
-### 5. Rode o Worker (em outro terminal)
+**Terminal 2 — Worker:**
 
 ```bash
 cd apps/deploy-worker
 go run ./cmd/main.go
 ```
 
+> O `.env` é carregado automaticamente por ambos os serviços.
+
+### 3. Execute o frontend (desenvolvimento)
+
+```bash
+cd apps/frontend
+npm install    # apenas na primeira vez
+npm run dev
+```
+
+O dashboard estará disponível em `http://localhost:5173`.
+
+> Em desenvolvimento, o Vite faz proxy de `/api` para a API em `localhost:8080`.
+> Em produção, a própria API serve os arquivos estáticos do frontend (`apps/frontend/dist/`).
+
 ---
 
-## Usando a API
+## Endpoints da API
+
+### v1.0.0 (MVP)
+
+| Método | Rota | Descrição |
+|---|---|---|
+| `POST` | `/api/deploy` | Criar um novo deploy |
+| `GET` | `/api/deployments` | Listar deploys (paginado) |
+| `GET` | `/api/deployments/:id` | Detalhes de um deploy |
+| `PUT` | `/api/deployments/:id/cancel` | Cancelar um deploy pendente |
+
+### v1.1.0 (Dashboard + Rollback)
+
+| Método | Rota | Descrição |
+|---|---|---|
+| `GET` | `/api/deployments/:id/logs` | Logs de um deploy |
+| `GET` | `/api/deployments/:id/logs/download` | Download dos logs (.txt) |
+| `POST` | `/api/deployments/:id/rollback` | Solicitar rollback para versão anterior |
+| `POST` | `/api/deployments/:id/retry` | Reexecutar deploy falho |
+| `GET` | `/api/events?deploy_id=:id` | SSE streaming de eventos em tempo real |
+| `GET` | `/health` | Health check da API |
+
+---
+
+## Fluxo de Deploy
+
+```mermaid
+sequenceDiagram
+    participant U as Usuário
+    participant API as API
+    participant RMQ as RabbitMQ
+    participant W as Worker
+    participant TF as Terraform
+    participant DB as PostgreSQL
+
+    U->>API: POST /api/deploy {app_name, image_tag}
+    API->>DB: Salva deploy (status: pending)
+    API->>RMQ: Publica job
+    API->>DB: Atualiza status (queued)
+    API-->>U: 202 Accepted
+
+    RMQ->>W: Consome job
+    W->>DB: Atualiza status (in_progress)
+    W->>W: Gera terraform.tfvars
+    W->>TF: terraform init
+    W->>TF: terraform plan
+    W->>TF: terraform apply
+    TF->>Docker: Cria container
+    W->>W: Health Check
+    W->>DB: Atualiza status (success/failed)
+    W->>API: SSE event (deploy_completed)
+    API->>U: SSE: deploy_completed
+```
+
+---
+
+## Funcionalidades do Frontend
+
+### Dashboard
+- Listagem de deploys com paginação (20 por página)
+- Filtros por status (Todos, Sucesso, Falha, Em Andamento)
+- Botão "Novo Deploy" com formulário inline
+- Botão "Retry" em deploys falhos diretamente na tabela
+- Gráficos: deploys por dia (barras) e distribuição por status (pizza)
+
+### Detalhes do Deploy
+- Metadados completos (ID, app, imagem, datas)
+- Timeline visual das etapas do pipeline
+- Logs com auto-scroll e suporte a SSE em tempo real
+- Botões de ação: Rollback (modal), Retry, Cancelar, Download de logs
+
+### Histórico Visual
+- Taxa de sucesso, falha e cancelamento
+- Gráfico de deploys por dia (últimos 100 deploys)
+- Gráfico de distribuição por status
+
+---
+
+## Exemplos de Uso da API
 
 ### Criar um deploy
 
@@ -149,67 +250,48 @@ curl -X POST http://localhost:8080/api/deploy \
   -d '{"app_name": "my-app", "image_tag": "nginx:latest"}'
 ```
 
-**Resposta (202 Accepted):**
-
-```json
-{
-  "success": true,
-  "data": {
-    "id": "a1b2c3d4-...",
-    "app_name": "my-app",
-    "image_tag": "nginx:latest",
-    "status": "queued",
-    "created_at": "2026-06-29T10:00:00Z",
-    "updated_at": "2026-06-29T10:00:00Z"
-  }
-}
-```
-
-### Listar deploys
+### Solicitar rollback
 
 ```bash
-curl http://localhost:8080/api/deployments
+curl -X POST http://localhost:8080/api/deployments/<deploy-id>/rollback \
+  -H "Content-Type: application/json" \
+  -d '{"target_version": "nginx:1.25"}'
 ```
 
-### Ver detalhes de um deploy
+### Reexecutar deploy falho
 
 ```bash
-curl http://localhost:8080/api/deployments/<deploy-id>
+curl -X POST http://localhost:8080/api/deployments/<deploy-id>/retry
 ```
 
-### Cancelar um deploy pendente
+### Conectar SSE (JavaScript)
 
-```bash
-curl -X PUT http://localhost:8080/api/deployments/<deploy-id>/cancel
+```javascript
+const source = new EventSource('/api/events?deploy_id=abc-123');
+
+source.addEventListener('deploy_log', (e) => {
+  const data = JSON.parse(e.data);
+  console.log(`[${data.step}] ${data.message}`);
+});
+
+source.addEventListener('deploy_completed', (e) => {
+  const data = JSON.parse(e.data);
+  console.log(`Deploy concluído: ${data.status}`);
+  source.close();
+});
 ```
-
----
-
-## Fluxo de Deploy
-
-1. Cliente envia `POST /api/deploy`
-2. API valida os parâmetros e salva no banco (status: `pending`)
-3. API publica um job no RabbitMQ e atualiza status para `queued`
-4. Worker consome o job da fila
-5. Worker atualiza status para `in_progress`
-6. Worker executa:
-   - `terraform init` — inicializa o provider Docker
-   - `terraform plan` — gera o plano de execução
-   - `terraform apply` — provisiona o container Docker
-7. Worker executa health check HTTP no container
-8. Worker atualiza status para `success` ou `failed`
-9. Logs de cada etapa são persistidos no PostgreSQL
 
 ---
 
 ## Serviços
 
-| Serviço | Porta | URL |
+| Serviço | Porta (Host) | URL |
 |---|---|---|
 | API | 8080 | http://localhost:8080 |
+| Frontend (dev) | 5173 | http://localhost:5173 |
 | RabbitMQ (AMQP) | 5672 | amqp://guest:guest@localhost:5672 |
 | RabbitMQ (Management) | 15672 | http://localhost:15672 |
-| PostgreSQL | 5432 | `postgres://gitops:gitops@localhost:5432/gitops` |
+| PostgreSQL | 5433 | `postgres://gitops:gitops@localhost:5433/gitops` |
 
 ---
 
@@ -221,7 +303,7 @@ curl -X PUT http://localhost:8080/api/deployments/<deploy-id>/cancel
 .\scripts\setup.ps1 -InitTerraform
 ```
 
-### Deploy de exemplo
+### Deploy de exemplo via PowerShell
 
 ```powershell
 .\scripts\deploy.ps1 -AppName my-app -ImageTag nginx:latest
@@ -231,9 +313,13 @@ curl -X PUT http://localhost:8080/api/deployments/<deploy-id>/cancel
 
 ## Roadmap
 
-| Versão | Foco |
-|---|---|
-| **MVP v1.0.0** | Backend: API + Worker + Terraform + RabbitMQ + PostgreSQL |
-| v1.1.0 | Dashboard Web + Rollback |
-| v1.2.0 | Observabilidade (Prometheus, Grafana, Loki) |
-| v2.0.0 | GitOps completo (Kubernetes, Argo CD, Helm) |
+| Versão | Foco | Status |
+|---|---|---|
+| **MVP v1.0.0** | Backend: API + Worker + Terraform + RabbitMQ + PostgreSQL | ✅ Concluído |
+| **v1.1.0** | Dashboard Web + Rollback + SSE + logs | ✅ Concluído |
+| v1.2.0 | Observabilidade (Prometheus, Grafana, Loki, OpenTelemetry) | 📋 Planejado |
+| v2.0.0 | GitOps completo (Kubernetes, Argo CD, Helm, Canary, Blue/Green) | 📋 Planejado |
+
+---
+
+> **Desenvolvido por Lázaro Vasconcelos** — Plataforma de estudo em Platform Engineering e DevOps

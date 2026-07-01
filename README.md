@@ -3,8 +3,6 @@
 Plataforma de Deploy Automatizado baseada em GitOps e Infrastructure as Code.
 
 > **Versão atual:** v1.1.0 — Dashboard + Rollback
->
-> **Desenvolvido por:** Lázaro Vasconcelos
 
 ---
 

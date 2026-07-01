@@ -97,7 +97,6 @@ gitops-lite/
 │   ├── setup.ps1
 │   ├── migrate.ps1
 │   └── deploy.ps1
-├── docs/                           # PRDs e especificações
 ├── go.work                         # Go workspace
 └── README.md
 ```
